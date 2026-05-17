@@ -403,6 +403,9 @@ def qibotn_convert_to_quimb(
     from qibo.gates.abstract import ParametrizedGate
     from qibotn.backends.quimb import GATE_MAP
 
+    identity_2x2 = np.eye(2, dtype=np.complex128)
+    _fixed_gate_matrices = {}
+
     def apply_direct(quimb_circuit, gate_id, params, qubits, is_parametrized=False):
         if is_parametrized:
             quimb_circuit.apply_gate(
@@ -429,13 +432,27 @@ def qibotn_convert_to_quimb(
         if absorbed == 0:
             return None, 0
 
-        base = np.asarray(gate.matrix()).reshape(4, 4)
-        identity = np.eye(2, dtype=base.dtype)
+        is_parametrized = isinstance(gate, ParametrizedGate) and getattr(gate, "trainable", True)
+        gate_name = getattr(gate, "name", None)
+        if not is_parametrized and gate_name:
+            if gate_name not in _fixed_gate_matrices:
+                _fixed_gate_matrices[gate_name] = np.asarray(gate.matrix()).reshape(4, 4)
+            base = _fixed_gate_matrices[gate_name]
+        else:
+            base = np.asarray(gate.matrix()).reshape(4, 4)
+
         if left0 is None:
-            left0 = identity
+            left0 = identity_2x2
         if left1 is None:
-            left1 = identity
-        combined = base @ np.kron(left0, left1)
+            left1 = identity_2x2
+            
+        kron_out = np.empty((4, 4), dtype=base.dtype)
+        kron_out[0:2, 0:2] = left0[0, 0] * left1
+        kron_out[0:2, 2:4] = left0[0, 1] * left1
+        kron_out[2:4, 0:2] = left0[1, 0] * left1
+        kron_out[2:4, 2:4] = left0[1, 1] * left1
+
+        combined = base @ kron_out
         pending_1q[q0] = None
         pending_1q[q1] = None
         return combined, absorbed
@@ -477,8 +494,17 @@ def qibotn_convert_to_quimb(
             qubits = getattr(gate, "qubits", ())
             n_active_qubits = len(qubits)
 
+            is_parametrized = isinstance(gate, ParametrizedGate) and getattr(
+                gate, "trainable", True
+            )
+
             if n_active_qubits == 1:
-                matrix = np.asarray(gate.matrix())
+                if not is_parametrized and gate_name:
+                    if gate_name not in _fixed_gate_matrices:
+                        _fixed_gate_matrices[gate_name] = np.asarray(gate.matrix())
+                    matrix = _fixed_gate_matrices[gate_name]
+                else:
+                    matrix = np.asarray(gate.matrix())
                 qubit = qubits[0]
                 if pending_1q[qubit] is None:
                     pending_1q[qubit] = matrix
@@ -514,9 +540,6 @@ def qibotn_convert_to_quimb(
                     gate_count_applied_1q += 1
                     gate_count_flushed_1q_original += flushed_count
 
-            is_parametrized = isinstance(gate, ParametrizedGate) and getattr(
-                gate, "trainable", True
-            )
             apply_direct(
                 quimb_circuit=quimb_circuit,
                 gate_id=(
@@ -638,7 +661,12 @@ def qibotn_convert_to_quimb(
 
         if fuse_single_qubit and n_active_qubits == 1:
             t_fuse0 = time.perf_counter()
-            matrix = np.asarray(gate.matrix())
+            if not is_parametrized and gate_name:
+                if gate_name not in _fixed_gate_matrices:
+                    _fixed_gate_matrices[gate_name] = np.asarray(gate.matrix())
+                matrix = _fixed_gate_matrices[gate_name]
+            else:
+                matrix = np.asarray(gate.matrix())
             qubit = qubits[0]
             if pending_1q[qubit] is None:
                 pending_1q[qubit] = matrix
