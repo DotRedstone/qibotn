@@ -166,3 +166,11 @@ cython_debug/
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
 .devenv
+
+# Local built tools
+/tools/qtn_runner
+/tools/qtn_summarize
+/tools/*.exe
+/tools/*.so
+/tools/*.dll
+/tools/*.dylib
