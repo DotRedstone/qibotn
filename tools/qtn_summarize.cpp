@@ -175,6 +175,11 @@ static std::vector<std::string> fields() {
         "gate_count_applied_2q",
         "gate_count_applied_other",
         "gate_count_absorbed_1q",
+        "gate_count_pending_1q_groups_absorbed",
+        "gate_count_absorbed_1q_original",
+        "gate_count_flushed_1q_original",
+        "gate_count_plain_2q",
+        "gate_count_fused_2q",
         "state_norm",
         "reference_error",
         "reference_ok",
@@ -253,6 +258,16 @@ static std::map<std::string, std::string> summarize_one(const fs::path& stdout_p
         json_number(stdout_text, "gate_count_applied_other");
     row["gate_count_absorbed_1q"] =
         json_number(stdout_text, "gate_count_absorbed_1q");
+    row["gate_count_pending_1q_groups_absorbed"] =
+        json_number(stdout_text, "gate_count_pending_1q_groups_absorbed");
+    row["gate_count_absorbed_1q_original"] =
+        json_number(stdout_text, "gate_count_absorbed_1q_original");
+    row["gate_count_flushed_1q_original"] =
+        json_number(stdout_text, "gate_count_flushed_1q_original");
+    row["gate_count_plain_2q"] =
+        json_number(stdout_text, "gate_count_plain_2q");
+    row["gate_count_fused_2q"] =
+        json_number(stdout_text, "gate_count_fused_2q");
     row["state_norm"] = json_number(stdout_text, "state_norm");
 
     std::string reference_error = json_number_after(stdout_text, "\"reference\"", "abs_error");
