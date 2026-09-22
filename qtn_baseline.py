@@ -411,13 +411,15 @@ def qibotn_convert_to_quimb(
         else:
             quimb_circuit.apply_gate(gate_id, *params, *qubits)
 
-    def flush_pending_fast(quimb_circuit, pending_1q, qubit):
+    def flush_pending_fast(quimb_circuit, pending_1q, pending_1q_counts, qubit):
         matrix = pending_1q[qubit]
         if matrix is None:
-            return False
+            return False, 0
         quimb_circuit.apply_gate(matrix, qubit)
         pending_1q[qubit] = None
-        return True
+        flushed_count = pending_1q_counts[qubit]
+        pending_1q_counts[qubit] = 0
+        return True, flushed_count
 
     def absorb_pending_into_two_qubit_gate(gate, pending_1q, qubits):
         q0, q1 = qubits
@@ -447,6 +449,7 @@ def qibotn_convert_to_quimb(
         t_total0 = time.perf_counter()
         quimb_circuit = circuit_type(circuit.nqubits, **circuit_kwargs)
         pending_1q = [None] * circuit.nqubits
+        pending_1q_counts = [0] * circuit.nqubits
         gate_count_1q = 0
         gate_count_2q = 0
         gate_count_other = 0
@@ -455,6 +458,11 @@ def qibotn_convert_to_quimb(
         gate_count_applied_2q = 0
         gate_count_applied_other = 0
         gate_count_absorbed_1q = 0
+        gate_count_pending_1q_groups_absorbed = 0
+        gate_count_absorbed_1q_original = 0
+        gate_count_flushed_1q_original = 0
+        gate_count_plain_2q = 0
+        gate_count_fused_2q = 0
 
         for gate in circuit.queue:
             gate_name = getattr(gate, "name", None)
@@ -476,10 +484,13 @@ def qibotn_convert_to_quimb(
                     pending_1q[qubit] = matrix
                 else:
                     pending_1q[qubit] = matrix @ pending_1q[qubit]
+                pending_1q_counts[qubit] += 1
                 gate_count_1q += 1
                 continue
 
             if absorb_1q_into_2q and n_active_qubits == 2:
+                q0, q1 = qubits
+                orig_1q_absorbed = pending_1q_counts[q0] + pending_1q_counts[q1]
                 combined_gate, absorbed = absorb_pending_into_two_qubit_gate(
                     gate=gate,
                     pending_1q=pending_1q,
@@ -490,11 +501,18 @@ def qibotn_convert_to_quimb(
                     gate_count_2q += 1
                     gate_count_applied_2q += 1
                     gate_count_absorbed_1q += absorbed
+                    gate_count_pending_1q_groups_absorbed += absorbed
+                    gate_count_absorbed_1q_original += orig_1q_absorbed
+                    gate_count_fused_2q += 1
+                    pending_1q_counts[q0] = 0
+                    pending_1q_counts[q1] = 0
                     continue
 
             for qubit in qubits:
-                if flush_pending_fast(quimb_circuit, pending_1q, qubit):
+                applied, flushed_count = flush_pending_fast(quimb_circuit, pending_1q, pending_1q_counts, qubit)
+                if applied:
                     gate_count_applied_1q += 1
+                    gate_count_flushed_1q_original += flushed_count
 
             is_parametrized = isinstance(gate, ParametrizedGate) and getattr(
                 gate, "trainable", True
@@ -513,14 +531,17 @@ def qibotn_convert_to_quimb(
 
             if n_active_qubits == 2:
                 gate_count_2q += 1
+                gate_count_plain_2q += 1
                 gate_count_applied_2q += 1
             else:
                 gate_count_other += 1
                 gate_count_applied_other += 1
 
         for qubit in range(circuit.nqubits):
-            if flush_pending_fast(quimb_circuit, pending_1q, qubit):
+            applied, flushed_count = flush_pending_fast(quimb_circuit, pending_1q, pending_1q_counts, qubit)
+            if applied:
                 gate_count_applied_1q += 1
+                gate_count_flushed_1q_original += flushed_count
 
         t_total1 = time.perf_counter()
         return quimb_circuit, {
@@ -534,6 +555,11 @@ def qibotn_convert_to_quimb(
             "gate_count_applied_2q": gate_count_applied_2q,
             "gate_count_applied_other": gate_count_applied_other,
             "gate_count_absorbed_1q": gate_count_absorbed_1q,
+            "gate_count_pending_1q_groups_absorbed": gate_count_pending_1q_groups_absorbed,
+            "gate_count_absorbed_1q_original": gate_count_absorbed_1q_original,
+            "gate_count_flushed_1q_original": gate_count_flushed_1q_original,
+            "gate_count_plain_2q": gate_count_plain_2q,
+            "gate_count_fused_2q": gate_count_fused_2q,
         }
 
     def add_apply_time(stats, dt, n_active_qubits):
@@ -548,7 +574,7 @@ def qibotn_convert_to_quimb(
             stats["apply_other_sec"] += dt
             stats["gate_count_applied_other"] += 1
 
-    def flush_pending_one_qubit(quimb_circuit, pending_1q, qubit, stats):
+    def flush_pending_one_qubit(quimb_circuit, pending_1q, pending_1q_counts, qubit, stats):
         matrix = pending_1q[qubit]
         if matrix is None:
             return
@@ -556,7 +582,9 @@ def qibotn_convert_to_quimb(
         quimb_circuit.apply_gate(matrix, qubit)
         t_apply1 = time.perf_counter()
         add_apply_time(stats, t_apply1 - t_apply0, 1)
+        stats["gate_count_flushed_1q_original"] += pending_1q_counts[qubit]
         pending_1q[qubit] = None
+        pending_1q_counts[qubit] = 0
 
     t_total0 = time.perf_counter()
     t_init0 = time.perf_counter()
@@ -575,12 +603,18 @@ def qibotn_convert_to_quimb(
         "gate_count_applied_2q": 0,
         "gate_count_applied_other": 0,
         "gate_count_absorbed_1q": 0,
+        "gate_count_pending_1q_groups_absorbed": 0,
+        "gate_count_absorbed_1q_original": 0,
+        "gate_count_flushed_1q_original": 0,
     }
     gate_count_1q = 0
     gate_count_2q = 0
     gate_count_other = 0
     gate_count_measure = 0
+    gate_count_plain_2q = 0
+    gate_count_fused_2q = 0
     pending_1q = [None] * circuit.nqubits
+    pending_1q_counts = [0] * circuit.nqubits
 
     t_loop0 = time.perf_counter()
     for gate in circuit.queue:
@@ -610,12 +644,15 @@ def qibotn_convert_to_quimb(
                 pending_1q[qubit] = matrix
             else:
                 pending_1q[qubit] = matrix @ pending_1q[qubit]
+            pending_1q_counts[qubit] += 1
             fusion_matrix_sec += time.perf_counter() - t_fuse0
             gate_count_1q += 1
             continue
 
         if fuse_single_qubit:
             if absorb_1q_into_2q and n_active_qubits == 2:
+                q0, q1 = qubits
+                orig_1q_absorbed = pending_1q_counts[q0] + pending_1q_counts[q1]
                 t_absorb0 = time.perf_counter()
                 combined_gate, absorbed = absorb_pending_into_two_qubit_gate(
                     gate=gate,
@@ -629,11 +666,16 @@ def qibotn_convert_to_quimb(
                     t_apply1 = time.perf_counter()
                     add_apply_time(stats, t_apply1 - t_apply0, 2)
                     stats["gate_count_absorbed_1q"] += absorbed
+                    stats["gate_count_pending_1q_groups_absorbed"] += absorbed
+                    stats["gate_count_absorbed_1q_original"] += orig_1q_absorbed
                     gate_count_2q += 1
+                    gate_count_fused_2q += 1
+                    pending_1q_counts[q0] = 0
+                    pending_1q_counts[q1] = 0
                     continue
 
             for qubit in qubits:
-                flush_pending_one_qubit(quimb_circuit, pending_1q, qubit, stats)
+                flush_pending_one_qubit(quimb_circuit, pending_1q, pending_1q_counts, qubit, stats)
 
         t_apply0 = time.perf_counter()
         apply_direct(
@@ -655,12 +697,13 @@ def qibotn_convert_to_quimb(
             gate_count_1q += 1
         elif n_active_qubits == 2:
             gate_count_2q += 1
+            gate_count_plain_2q += 1
         else:
             gate_count_other += 1
 
     if fuse_single_qubit:
         for qubit in range(circuit.nqubits):
-            flush_pending_one_qubit(quimb_circuit, pending_1q, qubit, stats)
+            flush_pending_one_qubit(quimb_circuit, pending_1q, pending_1q_counts, qubit, stats)
 
     t_loop1 = time.perf_counter()
     t_total1 = time.perf_counter()
@@ -684,6 +727,11 @@ def qibotn_convert_to_quimb(
         "gate_count_applied_2q": stats["gate_count_applied_2q"],
         "gate_count_applied_other": stats["gate_count_applied_other"],
         "gate_count_absorbed_1q": stats["gate_count_absorbed_1q"],
+        "gate_count_pending_1q_groups_absorbed": stats["gate_count_pending_1q_groups_absorbed"],
+        "gate_count_absorbed_1q_original": stats["gate_count_absorbed_1q_original"],
+        "gate_count_flushed_1q_original": stats["gate_count_flushed_1q_original"],
+        "gate_count_plain_2q": gate_count_plain_2q,
+        "gate_count_fused_2q": gate_count_fused_2q,
         "two_qubit_apply": two_qubit_apply,
     }
 
