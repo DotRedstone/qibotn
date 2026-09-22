@@ -146,6 +146,12 @@ dmypy.json
 # Pyre type checker
 .pyre/
 
+# Local benchmark artifacts
+/logs*/
+/cotengra_cache*/
+/sweep_*.out
+/*.npy
+
 
 # pytype static type analyzer
 .pytype/
