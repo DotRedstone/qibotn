@@ -36,6 +36,7 @@ struct Config {
     int timeout_sec = 300;
     bool dry_run = false;
     bool profile_conversion = false;
+    bool profile_quimb_internals = false;
     bool fuse_single_qubit = false;
     bool absorb_1q_into_2q = false;
     std::vector<std::string> observables = {"z0", "zz-chain"};
@@ -62,6 +63,7 @@ struct Case {
     std::string two_qubit_apply = "name";
     bool check_ref = false;
     bool profile_conversion = false;
+    bool profile_quimb_internals = false;
     bool fuse_single_qubit = false;
     bool absorb_1q_into_2q = false;
     int check_ref_max_qubits = 20;
@@ -287,6 +289,25 @@ static std::vector<std::string> csv_fields() {
         "stage_gate_apply_1q_sec",
         "stage_gate_apply_2q_sec",
         "stage_gate_apply_other_sec",
+        "stage_apply_2q_total_sec",
+        "stage_apply_2q_dispatch_sec",
+        "stage_apply_2q_gate_prepare_sec",
+        "stage_apply_2q_backend_call_sec",
+        "stage_apply_2q_postprocess_sec",
+        "quimb_internal_profile_enabled",
+        "quimb_internal_wrapped_symbol_count",
+        "quimb_internal_contract_sec",
+        "quimb_internal_contract_count",
+        "quimb_internal_svd_sec",
+        "quimb_internal_svd_count",
+        "quimb_internal_split_sec",
+        "quimb_internal_split_count",
+        "quimb_internal_canonicalize_sec",
+        "quimb_internal_canonicalize_count",
+        "quimb_internal_compress_sec",
+        "quimb_internal_compress_count",
+        "quimb_internal_gate_sec",
+        "quimb_internal_gate_count",
         "stage_gate_fusion_matrix_sec",
         "stage_gate_absorb_matrix_sec",
         "stage_expectation_contract_sec",
@@ -305,6 +326,26 @@ static std::vector<std::string> csv_fields() {
         "gate_count_flushed_1q_original",
         "gate_count_plain_2q",
         "gate_count_fused_2q",
+        "twoq_name_path_count",
+        "twoq_matrix_path_count",
+        "twoq_fallback_count",
+        "twoq_gate_count",
+        "twoq_gate_type_histogram",
+        "twoq_diagonal_count",
+        "twoq_diagonal_ratio",
+        "twoq_adjacent_count",
+        "twoq_adjacent_ratio",
+        "twoq_distance_histogram",
+        "twoq_max_distance",
+        "twoq_mean_distance",
+        "twoq_layer_count",
+        "twoq_per_layer_max",
+        "twoq_per_layer_mean",
+        "twoq_layer_histogram",
+        "mps_bond_count",
+        "mps_bond_max",
+        "mps_bond_mean",
+        "mps_bond_min",
         "expectation_value",
         "state_norm",
         "qibo",
@@ -390,6 +431,8 @@ static std::string case_json(const Case& c, int index) {
     }
     out << ",\"optimizer\":\"" << json_escape(c.optimizer) << "\"";
     out << ",\"profile_conversion\":" << (c.profile_conversion ? "true" : "false");
+    out << ",\"profile_quimb_internals\":"
+        << (c.profile_quimb_internals ? "true" : "false");
     out << ",\"fuse_single_qubit\":" << (c.fuse_single_qubit ? "true" : "false");
     out << ",\"absorb_1q_into_2q\":" << (c.absorb_1q_into_2q ? "true" : "false");
     out << ",\"check_ref\":" << (c.check_ref ? "true" : "false");
@@ -439,6 +482,9 @@ static std::string build_command(
     }
     if (c.profile_conversion) {
         args.push_back("--profile-conversion");
+    }
+    if (c.profile_quimb_internals) {
+        args.push_back("--profile-quimb-internals");
     }
     if (c.fuse_single_qubit) {
         args.push_back("--fuse-single-qubit");
@@ -552,6 +598,44 @@ static void fill_result_fields(
         json_number(stdout_text, "stage_gate_apply_2q_sec");
     row["stage_gate_apply_other_sec"] =
         json_number(stdout_text, "stage_gate_apply_other_sec");
+    row["stage_apply_2q_total_sec"] =
+        json_number(stdout_text, "stage_apply_2q_total_sec");
+    row["stage_apply_2q_dispatch_sec"] =
+        json_number(stdout_text, "stage_apply_2q_dispatch_sec");
+    row["stage_apply_2q_gate_prepare_sec"] =
+        json_number(stdout_text, "stage_apply_2q_gate_prepare_sec");
+    row["stage_apply_2q_backend_call_sec"] =
+        json_number(stdout_text, "stage_apply_2q_backend_call_sec");
+    row["stage_apply_2q_postprocess_sec"] =
+        json_number(stdout_text, "stage_apply_2q_postprocess_sec");
+    row["quimb_internal_profile_enabled"] =
+        json_bool(stdout_text, "quimb_internal_profile_enabled");
+    row["quimb_internal_wrapped_symbol_count"] =
+        json_number(stdout_text, "quimb_internal_wrapped_symbol_count");
+    row["quimb_internal_contract_sec"] =
+        json_number(stdout_text, "quimb_internal_contract_sec");
+    row["quimb_internal_contract_count"] =
+        json_number(stdout_text, "quimb_internal_contract_count");
+    row["quimb_internal_svd_sec"] =
+        json_number(stdout_text, "quimb_internal_svd_sec");
+    row["quimb_internal_svd_count"] =
+        json_number(stdout_text, "quimb_internal_svd_count");
+    row["quimb_internal_split_sec"] =
+        json_number(stdout_text, "quimb_internal_split_sec");
+    row["quimb_internal_split_count"] =
+        json_number(stdout_text, "quimb_internal_split_count");
+    row["quimb_internal_canonicalize_sec"] =
+        json_number(stdout_text, "quimb_internal_canonicalize_sec");
+    row["quimb_internal_canonicalize_count"] =
+        json_number(stdout_text, "quimb_internal_canonicalize_count");
+    row["quimb_internal_compress_sec"] =
+        json_number(stdout_text, "quimb_internal_compress_sec");
+    row["quimb_internal_compress_count"] =
+        json_number(stdout_text, "quimb_internal_compress_count");
+    row["quimb_internal_gate_sec"] =
+        json_number(stdout_text, "quimb_internal_gate_sec");
+    row["quimb_internal_gate_count"] =
+        json_number(stdout_text, "quimb_internal_gate_count");
     row["stage_gate_fusion_matrix_sec"] =
         json_number(stdout_text, "stage_gate_fusion_matrix_sec");
     row["stage_gate_absorb_matrix_sec"] =
@@ -583,6 +667,28 @@ static void fill_result_fields(
         json_number(stdout_text, "gate_count_plain_2q");
     row["gate_count_fused_2q"] =
         json_number(stdout_text, "gate_count_fused_2q");
+    row["twoq_name_path_count"] = json_number(stdout_text, "twoq_name_path_count");
+    row["twoq_matrix_path_count"] = json_number(stdout_text, "twoq_matrix_path_count");
+    row["twoq_fallback_count"] = json_number(stdout_text, "twoq_fallback_count");
+    row["twoq_gate_count"] = json_number(stdout_text, "twoq_gate_count");
+    row["twoq_gate_type_histogram"] =
+        json_string(stdout_text, "twoq_gate_type_histogram");
+    row["twoq_diagonal_count"] = json_number(stdout_text, "twoq_diagonal_count");
+    row["twoq_diagonal_ratio"] = json_number(stdout_text, "twoq_diagonal_ratio");
+    row["twoq_adjacent_count"] = json_number(stdout_text, "twoq_adjacent_count");
+    row["twoq_adjacent_ratio"] = json_number(stdout_text, "twoq_adjacent_ratio");
+    row["twoq_distance_histogram"] =
+        json_string(stdout_text, "twoq_distance_histogram");
+    row["twoq_max_distance"] = json_number(stdout_text, "twoq_max_distance");
+    row["twoq_mean_distance"] = json_number(stdout_text, "twoq_mean_distance");
+    row["twoq_layer_count"] = json_number(stdout_text, "twoq_layer_count");
+    row["twoq_per_layer_max"] = json_number(stdout_text, "twoq_per_layer_max");
+    row["twoq_per_layer_mean"] = json_number(stdout_text, "twoq_per_layer_mean");
+    row["twoq_layer_histogram"] = json_string(stdout_text, "twoq_layer_histogram");
+    row["mps_bond_count"] = json_number(stdout_text, "mps_bond_count");
+    row["mps_bond_max"] = json_number(stdout_text, "mps_bond_max");
+    row["mps_bond_mean"] = json_number(stdout_text, "mps_bond_mean");
+    row["mps_bond_min"] = json_number(stdout_text, "mps_bond_min");
     row["expectation_value"] = json_number(stdout_text, "expectation_value");
     row["expectation_engine"] = json_string(stdout_text, "expectation_engine");
     if (row["expectation_engine"].empty()) {
@@ -803,6 +909,7 @@ static Case main_case(const Config& cfg, const std::string& obs) {
     c.expectation_engine = cfg.expectation_engine;
     c.two_qubit_apply = cfg.two_qubit_apply;
     c.profile_conversion = cfg.profile_conversion;
+    c.profile_quimb_internals = cfg.profile_quimb_internals;
     c.fuse_single_qubit = cfg.fuse_single_qubit;
     c.absorb_1q_into_2q = cfg.absorb_1q_into_2q;
     return c;
@@ -940,6 +1047,7 @@ static void usage(const char* argv0) {
         << "  --expectation-engine  local|mps-batched|auto (default local)\n"
         << "  --two-qubit-apply     name|matrix for custom conversion (default name)\n"
         << "  --profile-conversion  Record detailed Qibo->quimb conversion timings\n"
+        << "  --profile-quimb-internals  Record selected quimb internal timings\n"
         << "  --fuse-single-qubit   Fuse pending single-qubit gates before MPS apply\n"
         << "  --absorb-1q-into-2q  Absorb pending 1q gates into following 2q gates\n"
         << "  --repeats N           Final suite repeats (default 3)\n"
@@ -1011,6 +1119,8 @@ int main(int argc, char** argv) {
                 cfg.batch = true;
             } else if (arg == "--profile-conversion") {
                 cfg.profile_conversion = true;
+            } else if (arg == "--profile-quimb-internals") {
+                cfg.profile_quimb_internals = true;
             } else if (arg == "--fuse-single-qubit") {
                 cfg.fuse_single_qubit = true;
             } else if (arg == "--absorb-1q-into-2q") {
@@ -1040,6 +1150,7 @@ int main(int argc, char** argv) {
         std::cout << "expectation_engine=" << cfg.expectation_engine << "\n";
         std::cout << "two_qubit_apply=" << cfg.two_qubit_apply << "\n";
         std::cout << "profile_conversion=" << (cfg.profile_conversion ? "true" : "false") << "\n";
+        std::cout << "profile_quimb_internals=" << (cfg.profile_quimb_internals ? "true" : "false") << "\n";
         std::cout << "fuse_single_qubit=" << (cfg.fuse_single_qubit ? "true" : "false") << "\n";
         std::cout << "absorb_1q_into_2q=" << (cfg.absorb_1q_into_2q ? "true" : "false") << "\n";
         std::cout << "cases=" << cases.size() << "\n";
@@ -1059,6 +1170,8 @@ int main(int argc, char** argv) {
                       << " elapsed=" << map_get(row, "elapsed_sec_internal")
                       << " q2q=" << map_get(row, "stage_qibo_to_quimb_sec")
                       << " apply=" << map_get(row, "stage_gate_apply_sec")
+                      << " 2q_backend=" << map_get(row, "stage_apply_2q_backend_call_sec")
+                      << " qsvd=" << map_get(row, "quimb_internal_svd_sec")
                       << " exp=" << map_get(row, "stage_expectation_contract_sec")
                       << " wall=" << (
                           !map_get(row, "time_elapsed_wall").empty()

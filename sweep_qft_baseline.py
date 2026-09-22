@@ -118,6 +118,9 @@ def run_one(args, mode, nqubits, log_dir):
     if args.profile_conversion:
         baseline_cmd += ["--profile-conversion"]
 
+    if args.profile_quimb_internals:
+        baseline_cmd += ["--profile-quimb-internals"]
+
     if args.fuse_single_qubit:
         baseline_cmd += ["--fuse-single-qubit"]
 
@@ -207,6 +210,45 @@ def run_one(args, mode, nqubits, log_dir):
                 "stage_gate_apply_1q_sec": meta.get("stage_gate_apply_1q_sec"),
                 "stage_gate_apply_2q_sec": meta.get("stage_gate_apply_2q_sec"),
                 "stage_gate_apply_other_sec": meta.get("stage_gate_apply_other_sec"),
+                "stage_apply_2q_total_sec": meta.get("stage_apply_2q_total_sec"),
+                "stage_apply_2q_dispatch_sec": meta.get(
+                    "stage_apply_2q_dispatch_sec"
+                ),
+                "stage_apply_2q_gate_prepare_sec": meta.get(
+                    "stage_apply_2q_gate_prepare_sec"
+                ),
+                "stage_apply_2q_backend_call_sec": meta.get(
+                    "stage_apply_2q_backend_call_sec"
+                ),
+                "stage_apply_2q_postprocess_sec": meta.get(
+                    "stage_apply_2q_postprocess_sec"
+                ),
+                "quimb_internal_profile_enabled": meta.get(
+                    "quimb_internal_profile_enabled"
+                ),
+                "quimb_internal_wrapped_symbol_count": meta.get(
+                    "quimb_internal_wrapped_symbol_count"
+                ),
+                "quimb_internal_contract_sec": meta.get("quimb_internal_contract_sec"),
+                "quimb_internal_contract_count": meta.get(
+                    "quimb_internal_contract_count"
+                ),
+                "quimb_internal_svd_sec": meta.get("quimb_internal_svd_sec"),
+                "quimb_internal_svd_count": meta.get("quimb_internal_svd_count"),
+                "quimb_internal_split_sec": meta.get("quimb_internal_split_sec"),
+                "quimb_internal_split_count": meta.get("quimb_internal_split_count"),
+                "quimb_internal_canonicalize_sec": meta.get(
+                    "quimb_internal_canonicalize_sec"
+                ),
+                "quimb_internal_canonicalize_count": meta.get(
+                    "quimb_internal_canonicalize_count"
+                ),
+                "quimb_internal_compress_sec": meta.get("quimb_internal_compress_sec"),
+                "quimb_internal_compress_count": meta.get(
+                    "quimb_internal_compress_count"
+                ),
+                "quimb_internal_gate_sec": meta.get("quimb_internal_gate_sec"),
+                "quimb_internal_gate_count": meta.get("quimb_internal_gate_count"),
                 "stage_gate_fusion_matrix_sec": meta.get(
                     "stage_gate_fusion_matrix_sec"
                 ),
@@ -228,6 +270,37 @@ def run_one(args, mode, nqubits, log_dir):
                 "gate_count_applied_2q": meta.get("gate_count_applied_2q"),
                 "gate_count_applied_other": meta.get("gate_count_applied_other"),
                 "gate_count_absorbed_1q": meta.get("gate_count_absorbed_1q"),
+                "gate_count_pending_1q_groups_absorbed": meta.get(
+                    "gate_count_pending_1q_groups_absorbed"
+                ),
+                "gate_count_absorbed_1q_original": meta.get(
+                    "gate_count_absorbed_1q_original"
+                ),
+                "gate_count_flushed_1q_original": meta.get(
+                    "gate_count_flushed_1q_original"
+                ),
+                "gate_count_plain_2q": meta.get("gate_count_plain_2q"),
+                "gate_count_fused_2q": meta.get("gate_count_fused_2q"),
+                "twoq_name_path_count": meta.get("twoq_name_path_count"),
+                "twoq_matrix_path_count": meta.get("twoq_matrix_path_count"),
+                "twoq_fallback_count": meta.get("twoq_fallback_count"),
+                "twoq_gate_count": meta.get("twoq_gate_count"),
+                "twoq_gate_type_histogram": meta.get("twoq_gate_type_histogram"),
+                "twoq_diagonal_count": meta.get("twoq_diagonal_count"),
+                "twoq_diagonal_ratio": meta.get("twoq_diagonal_ratio"),
+                "twoq_adjacent_count": meta.get("twoq_adjacent_count"),
+                "twoq_adjacent_ratio": meta.get("twoq_adjacent_ratio"),
+                "twoq_distance_histogram": meta.get("twoq_distance_histogram"),
+                "twoq_max_distance": meta.get("twoq_max_distance"),
+                "twoq_mean_distance": meta.get("twoq_mean_distance"),
+                "twoq_layer_count": meta.get("twoq_layer_count"),
+                "twoq_per_layer_max": meta.get("twoq_per_layer_max"),
+                "twoq_per_layer_mean": meta.get("twoq_per_layer_mean"),
+                "twoq_layer_histogram": meta.get("twoq_layer_histogram"),
+                "mps_bond_count": meta.get("mps_bond_count"),
+                "mps_bond_max": meta.get("mps_bond_max"),
+                "mps_bond_mean": meta.get("mps_bond_mean"),
+                "mps_bond_min": meta.get("mps_bond_min"),
                 "state_shape": meta.get("state_shape"),
                 "state_dtype": meta.get("state_dtype"),
                 "state_norm": meta.get("state_norm"),
@@ -349,6 +422,7 @@ def main():
     )
     parser.add_argument("--two-qubit-apply", choices=["name", "matrix"], default="name")
     parser.add_argument("--profile-conversion", action="store_true")
+    parser.add_argument("--profile-quimb-internals", action="store_true")
     parser.add_argument("--fuse-single-qubit", action="store_true")
     parser.add_argument("--absorb-1q-into-2q", action="store_true")
     parser.add_argument("--threads", type=int, default=None)

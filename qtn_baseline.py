@@ -1,4 +1,5 @@
 import argparse
+import importlib
 import importlib.metadata as md
 import inspect
 import json
@@ -28,6 +29,307 @@ def versions():
 
 def gate_count(circuit):
     return len(circuit.queue)
+
+
+def histogram_to_text(histogram):
+    if not histogram:
+        return ""
+    return ";".join(
+        f"{key}:{histogram[key]}"
+        for key in sorted(histogram, key=lambda item: str(item))
+    )
+
+
+def increment_histogram(histogram, key, amount=1):
+    histogram[key] = histogram.get(key, 0) + amount
+
+
+def gate_type_label(gate):
+    name = getattr(gate, "name", None)
+    if name is None:
+        name = gate.__class__.__name__
+    return str(name).upper()
+
+
+def matrix_is_diagonal(matrix, atol=1e-12):
+    arr = np.asarray(matrix).reshape(4, 4)
+    offdiag = arr.copy()
+    np.fill_diagonal(offdiag, 0)
+    return bool(np.all(np.abs(offdiag) <= atol))
+
+
+def make_twoq_structure_tracker(nqubits):
+    return {
+        "twoq_gate_type_histogram": {},
+        "twoq_distance_histogram": {},
+        "twoq_layer_histogram": {},
+        "twoq_gate_count": 0,
+        "twoq_diagonal_count": 0,
+        "twoq_adjacent_count": 0,
+        "twoq_max_distance": 0,
+        "twoq_distance_sum": 0,
+        "twoq_layer_count": 0,
+        "twoq_per_layer_max": 0,
+        "_last_layer_by_qubit": [-1] * nqubits,
+    }
+
+
+def update_twoq_structure_tracker(tracker, gate, qubits, include_matrix_stats):
+    if not qubits:
+        return
+
+    layer = max(tracker["_last_layer_by_qubit"][qubit] for qubit in qubits) + 1
+    for qubit in qubits:
+        tracker["_last_layer_by_qubit"][qubit] = layer
+
+    if len(qubits) != 2:
+        return
+
+    q0, q1 = qubits
+    distance = abs(q1 - q0)
+    tracker["twoq_gate_count"] += 1
+    tracker["twoq_distance_sum"] += distance
+    tracker["twoq_max_distance"] = max(tracker["twoq_max_distance"], distance)
+    if distance == 1:
+        tracker["twoq_adjacent_count"] += 1
+
+    increment_histogram(tracker["twoq_gate_type_histogram"], gate_type_label(gate))
+    increment_histogram(tracker["twoq_distance_histogram"], distance)
+    increment_histogram(tracker["twoq_layer_histogram"], layer)
+
+    if include_matrix_stats and matrix_is_diagonal(gate.matrix()):
+        tracker["twoq_diagonal_count"] += 1
+
+
+def finalize_twoq_structure_tracker(tracker):
+    twoq_count = tracker["twoq_gate_count"]
+    layer_counts = list(tracker["twoq_layer_histogram"].values())
+    tracker["twoq_layer_count"] = len(layer_counts)
+    tracker["twoq_per_layer_max"] = max(layer_counts) if layer_counts else 0
+
+    return {
+        "twoq_gate_count": twoq_count,
+        "twoq_gate_type_histogram": histogram_to_text(
+            tracker["twoq_gate_type_histogram"]
+        ),
+        "twoq_diagonal_count": tracker["twoq_diagonal_count"],
+        "twoq_diagonal_ratio": (
+            tracker["twoq_diagonal_count"] / twoq_count if twoq_count else None
+        ),
+        "twoq_adjacent_count": tracker["twoq_adjacent_count"],
+        "twoq_adjacent_ratio": (
+            tracker["twoq_adjacent_count"] / twoq_count if twoq_count else None
+        ),
+        "twoq_distance_histogram": histogram_to_text(
+            tracker["twoq_distance_histogram"]
+        ),
+        "twoq_max_distance": tracker["twoq_max_distance"] if twoq_count else None,
+        "twoq_mean_distance": (
+            tracker["twoq_distance_sum"] / twoq_count if twoq_count else None
+        ),
+        "twoq_layer_count": tracker["twoq_layer_count"],
+        "twoq_per_layer_max": tracker["twoq_per_layer_max"],
+        "twoq_per_layer_mean": (
+            twoq_count / tracker["twoq_layer_count"]
+            if tracker["twoq_layer_count"]
+            else None
+        ),
+        "twoq_layer_histogram": histogram_to_text(tracker["twoq_layer_histogram"]),
+    }
+
+
+def mps_bond_dimension_stats(quimb_circuit):
+    psi = getattr(quimb_circuit, "psi", None)
+    if psi is None:
+        return {}
+
+    bond_sizes = getattr(psi, "bond_sizes", None)
+    if not callable(bond_sizes):
+        return {}
+
+    try:
+        raw_bonds = bond_sizes()
+    except Exception:
+        return {}
+
+    if isinstance(raw_bonds, dict):
+        raw_bonds = raw_bonds.values()
+
+    try:
+        bonds = [int(bond) for bond in raw_bonds]
+    except Exception:
+        return {}
+
+    if not bonds:
+        return {}
+
+    return {
+        "mps_bond_count": len(bonds),
+        "mps_bond_max": max(bonds),
+        "mps_bond_mean": float(sum(bonds) / len(bonds)),
+        "mps_bond_min": min(bonds),
+    }
+
+
+class QuimbInternalProfiler:
+    """Optional monkey-patch profiler for quimb internals.
+
+    This records inclusive time spent in selected quimb functions/methods.
+    It does not replace implementations or alter arguments/results.
+    """
+
+    PROFILE_KEYS = (
+        "contract",
+        "svd",
+        "split",
+        "canonicalize",
+        "compress",
+        "gate",
+    )
+
+    MODULE_FUNCTIONS = {
+        "quimb.tensor.tensor_core": {
+            "tensor_contract": "contract",
+            "tensor_split": "split",
+            "tensor_network_ag_gate": "gate",
+            "tensor_network_gate_inds": "gate",
+            "tensor_network_gate_inds_basic": "gate",
+            "tensor_network_gate_inds_lazy": "gate",
+            "tensor_network_gate_inds_split": "gate",
+            "tensor_network_gate_inds_reduce_split": "gate",
+        },
+        "quimb.tensor.decomp": {
+            "_svd": "svd",
+            "svd": "svd",
+            "svd_truncated": "svd",
+            "similarity_compress": "compress",
+        },
+    }
+
+    CLASS_METHODS = {
+        "contract": "contract",
+        "contract_": "contract",
+        "split": "split",
+        "split_": "split",
+        "gate": "gate",
+        "gate_": "gate",
+        "gate_split": "gate",
+        "gate_split_": "gate",
+        "gate_with_auto_swap": "gate",
+        "gate_with_auto_swap_": "gate",
+        "canonize": "canonicalize",
+        "canonize_": "canonicalize",
+        "canonize_between": "canonicalize",
+        "canonize_between_": "canonicalize",
+        "canonicalize": "canonicalize",
+        "canonicalize_": "canonicalize",
+        "left_canonize": "canonicalize",
+        "left_canonize_": "canonicalize",
+        "right_canonize": "canonicalize",
+        "right_canonize_": "canonicalize",
+        "compress": "compress",
+        "compress_": "compress",
+        "compress_between": "compress",
+        "compress_between_": "compress",
+    }
+
+    CLASS_MODULES = (
+        "quimb.tensor.tensor_core",
+        "quimb.tensor.tensor_1d",
+    )
+
+    def __init__(self, enabled=False):
+        self.enabled = enabled
+        self.times = {key: 0.0 for key in self.PROFILE_KEYS}
+        self.counts = {key: 0 for key in self.PROFILE_KEYS}
+        self.patches = []
+        self.wrapped_symbol_count = 0
+
+    def _record(self, key, elapsed):
+        self.times[key] += elapsed
+        self.counts[key] += 1
+
+    def _wrap_attr(self, owner, attr, key):
+        try:
+            original = getattr(owner, attr)
+        except Exception:
+            return
+        if not callable(original):
+            return
+
+        def wrapped(*args, **kwargs):
+            t0 = time.perf_counter()
+            try:
+                return original(*args, **kwargs)
+            finally:
+                self._record(key, time.perf_counter() - t0)
+
+        try:
+            setattr(owner, attr, wrapped)
+        except Exception:
+            return
+        self.patches.append((owner, attr, original))
+
+    def install(self):
+        if not self.enabled:
+            return
+
+        for module_name, functions in self.MODULE_FUNCTIONS.items():
+            try:
+                module = importlib.import_module(module_name)
+            except Exception:
+                continue
+            for func_name, key in functions.items():
+                if hasattr(module, func_name):
+                    self._wrap_attr(module, func_name, key)
+
+        for module_name in self.CLASS_MODULES:
+            try:
+                module = importlib.import_module(module_name)
+            except Exception:
+                continue
+            for class_name in dir(module):
+                try:
+                    cls = getattr(module, class_name)
+                except Exception:
+                    continue
+                if not isinstance(cls, type):
+                    continue
+                namespace = getattr(cls, "__dict__", {})
+                for method_name, key in self.CLASS_METHODS.items():
+                    if method_name in namespace:
+                        self._wrap_attr(cls, method_name, key)
+
+        self.wrapped_symbol_count = max(
+            self.wrapped_symbol_count,
+            len(self.patches),
+        )
+
+    def restore(self):
+        for owner, attr, original in reversed(self.patches):
+            try:
+                setattr(owner, attr, original)
+            except Exception:
+                pass
+        self.patches.clear()
+
+    def __enter__(self):
+        self.install()
+        return self
+
+    def __exit__(self, exc_type, exc, traceback):
+        self.restore()
+        return False
+
+    def as_meta(self):
+        meta = {
+            "quimb_internal_profile_enabled": bool(self.enabled),
+            "quimb_internal_wrapped_symbol_count": self.wrapped_symbol_count,
+        }
+        for key in self.PROFILE_KEYS:
+            meta[f"quimb_internal_{key}_sec"] = self.times[key]
+            meta[f"quimb_internal_{key}_count"] = self.counts[key]
+        return meta
 
 
 def build_qft_circuit(nqubits, ngates=None, seed=None):
@@ -387,18 +689,24 @@ def qibotn_convert_to_quimb(
     fuse_single_qubit,
     absorb_1q_into_2q,
     two_qubit_apply,
+    profile_quimb_internals,
 ):
     fuse_single_qubit = fuse_single_qubit or absorb_1q_into_2q
 
     if not profile_conversion and not fuse_single_qubit:
         t0 = time.perf_counter()
-        quimb_circuit = backend_obj._qibo_circuit_to_quimb(
-            circuit,
-            quimb_circuit_type=circuit_type,
-            **circuit_kwargs,
-        )
+        quimb_profiler = QuimbInternalProfiler(profile_quimb_internals)
+        with quimb_profiler:
+            quimb_circuit = backend_obj._qibo_circuit_to_quimb(
+                circuit,
+                quimb_circuit_type=circuit_type,
+                **circuit_kwargs,
+            )
         t1 = time.perf_counter()
-        return quimb_circuit, {"stage_qibo_to_quimb_sec": t1 - t0}
+        return quimb_circuit, {
+            "stage_qibo_to_quimb_sec": t1 - t0,
+            **quimb_profiler.as_meta(),
+        }
 
     from qibo.gates.abstract import ParametrizedGate
     from qibotn.backends.quimb import GATE_MAP
@@ -462,8 +770,11 @@ def qibotn_convert_to_quimb(
             return np.asarray(gate.matrix()).reshape(4, 4)
         return quimb_gate_name
 
+    quimb_profiler = QuimbInternalProfiler(profile_quimb_internals)
+
     if fuse_single_qubit and not profile_conversion:
         t_total0 = time.perf_counter()
+        quimb_profiler.install()
         quimb_circuit = circuit_type(circuit.nqubits, **circuit_kwargs)
         pending_1q = [None] * circuit.nqubits
         pending_1q_counts = [0] * circuit.nqubits
@@ -480,6 +791,10 @@ def qibotn_convert_to_quimb(
         gate_count_flushed_1q_original = 0
         gate_count_plain_2q = 0
         gate_count_fused_2q = 0
+        twoq_name_path_count = 0
+        twoq_matrix_path_count = 0
+        twoq_fallback_count = 0
+        structure_tracker = make_twoq_structure_tracker(circuit.nqubits)
 
         for gate in circuit.queue:
             gate_name = getattr(gate, "name", None)
@@ -493,6 +808,12 @@ def qibotn_convert_to_quimb(
             params = getattr(gate, "parameters", ())
             qubits = getattr(gate, "qubits", ())
             n_active_qubits = len(qubits)
+            update_twoq_structure_tracker(
+                structure_tracker,
+                gate=gate,
+                qubits=qubits,
+                include_matrix_stats=False,
+            )
 
             is_parametrized = isinstance(gate, ParametrizedGate) and getattr(
                 gate, "trainable", True
@@ -530,6 +851,7 @@ def qibotn_convert_to_quimb(
                     gate_count_pending_1q_groups_absorbed += absorbed
                     gate_count_absorbed_1q_original += orig_1q_absorbed
                     gate_count_fused_2q += 1
+                    twoq_matrix_path_count += 1
                     pending_1q_counts[q0] = 0
                     pending_1q_counts[q1] = 0
                     continue
@@ -540,13 +862,20 @@ def qibotn_convert_to_quimb(
                     gate_count_applied_1q += 1
                     gate_count_flushed_1q_original += flushed_count
 
+            gate_id = (
+                two_qubit_gate_id(gate, quimb_gate_name)
+                if n_active_qubits == 2
+                else quimb_gate_name
+            )
+            if n_active_qubits == 2:
+                if isinstance(gate_id, str):
+                    twoq_name_path_count += 1
+                else:
+                    twoq_matrix_path_count += 1
+
             apply_direct(
                 quimb_circuit=quimb_circuit,
-                gate_id=(
-                    two_qubit_gate_id(gate, quimb_gate_name)
-                    if n_active_qubits == 2
-                    else quimb_gate_name
-                ),
+                gate_id=gate_id,
                 params=params,
                 qubits=qubits,
                 is_parametrized=is_parametrized,
@@ -567,8 +896,10 @@ def qibotn_convert_to_quimb(
                 gate_count_flushed_1q_original += flushed_count
 
         t_total1 = time.perf_counter()
+        quimb_profiler.restore()
         return quimb_circuit, {
             "stage_qibo_to_quimb_sec": t_total1 - t_total0,
+            **quimb_profiler.as_meta(),
             "two_qubit_apply": two_qubit_apply,
             "gate_count_1q": gate_count_1q,
             "gate_count_2q": gate_count_2q,
@@ -583,6 +914,11 @@ def qibotn_convert_to_quimb(
             "gate_count_flushed_1q_original": gate_count_flushed_1q_original,
             "gate_count_plain_2q": gate_count_plain_2q,
             "gate_count_fused_2q": gate_count_fused_2q,
+            "twoq_name_path_count": twoq_name_path_count,
+            "twoq_matrix_path_count": twoq_matrix_path_count,
+            "twoq_fallback_count": twoq_fallback_count,
+            **finalize_twoq_structure_tracker(structure_tracker),
+            **mps_bond_dimension_stats(quimb_circuit),
         }
 
     def add_apply_time(stats, dt, n_active_qubits):
@@ -596,6 +932,15 @@ def qibotn_convert_to_quimb(
         else:
             stats["apply_other_sec"] += dt
             stats["gate_count_applied_other"] += 1
+
+    def add_twoq_profile_time(stats, total, prepare, backend_call, postprocess):
+        stats["apply_2q_total_sec"] += total
+        stats["apply_2q_gate_prepare_sec"] += prepare
+        stats["apply_2q_backend_call_sec"] += backend_call
+        stats["apply_2q_postprocess_sec"] += postprocess
+        dispatch = total - prepare - backend_call - postprocess
+        if dispatch > 0:
+            stats["apply_2q_dispatch_sec"] += dispatch
 
     def flush_pending_one_qubit(quimb_circuit, pending_1q, pending_1q_counts, qubit, stats):
         matrix = pending_1q[qubit]
@@ -622,6 +967,11 @@ def qibotn_convert_to_quimb(
         "apply_1q_sec": 0.0,
         "apply_2q_sec": 0.0,
         "apply_other_sec": 0.0,
+        "apply_2q_total_sec": 0.0,
+        "apply_2q_dispatch_sec": 0.0,
+        "apply_2q_gate_prepare_sec": 0.0,
+        "apply_2q_backend_call_sec": 0.0,
+        "apply_2q_postprocess_sec": 0.0,
         "gate_count_applied_1q": 0,
         "gate_count_applied_2q": 0,
         "gate_count_applied_other": 0,
@@ -636,9 +986,14 @@ def qibotn_convert_to_quimb(
     gate_count_measure = 0
     gate_count_plain_2q = 0
     gate_count_fused_2q = 0
+    twoq_name_path_count = 0
+    twoq_matrix_path_count = 0
+    twoq_fallback_count = 0
+    structure_tracker = make_twoq_structure_tracker(circuit.nqubits)
     pending_1q = [None] * circuit.nqubits
     pending_1q_counts = [0] * circuit.nqubits
 
+    quimb_profiler.install()
     t_loop0 = time.perf_counter()
     for gate in circuit.queue:
         t_meta0 = time.perf_counter()
@@ -654,6 +1009,12 @@ def qibotn_convert_to_quimb(
         params = getattr(gate, "parameters", ())
         qubits = getattr(gate, "qubits", ())
         n_active_qubits = len(qubits)
+        update_twoq_structure_tracker(
+            structure_tracker,
+            gate=gate,
+            qubits=qubits,
+            include_matrix_stats=True,
+        )
         is_parametrized = isinstance(gate, ParametrizedGate) and getattr(
             gate, "trainable", True
         )
@@ -689,30 +1050,51 @@ def qibotn_convert_to_quimb(
                 )
                 absorb_matrix_sec += time.perf_counter() - t_absorb0
                 if combined_gate is not None:
+                    t_2q_total0 = time.perf_counter()
                     t_apply0 = time.perf_counter()
                     quimb_circuit.apply_gate(combined_gate, *qubits)
                     t_apply1 = time.perf_counter()
+                    t_post0 = time.perf_counter()
                     add_apply_time(stats, t_apply1 - t_apply0, 2)
                     stats["gate_count_absorbed_1q"] += absorbed
                     stats["gate_count_pending_1q_groups_absorbed"] += absorbed
                     stats["gate_count_absorbed_1q_original"] += orig_1q_absorbed
                     gate_count_2q += 1
                     gate_count_fused_2q += 1
+                    twoq_matrix_path_count += 1
                     pending_1q_counts[q0] = 0
                     pending_1q_counts[q1] = 0
+                    t_post1 = time.perf_counter()
+                    add_twoq_profile_time(
+                        stats=stats,
+                        total=t_post1 - t_2q_total0,
+                        prepare=0.0,
+                        backend_call=t_apply1 - t_apply0,
+                        postprocess=t_post1 - t_post0,
+                    )
                     continue
 
             for qubit in qubits:
                 flush_pending_one_qubit(quimb_circuit, pending_1q, pending_1q_counts, qubit, stats)
 
+        t_2q_total0 = time.perf_counter() if n_active_qubits == 2 else None
+        t_prepare0 = time.perf_counter()
+        gate_id = (
+            two_qubit_gate_id(gate, quimb_gate_name)
+            if n_active_qubits == 2
+            else quimb_gate_name
+        )
+        t_prepare1 = time.perf_counter()
+        if n_active_qubits == 2:
+            if isinstance(gate_id, str):
+                twoq_name_path_count += 1
+            else:
+                twoq_matrix_path_count += 1
+
         t_apply0 = time.perf_counter()
         apply_direct(
             quimb_circuit=quimb_circuit,
-            gate_id=(
-                two_qubit_gate_id(gate, quimb_gate_name)
-                if n_active_qubits == 2
-                else quimb_gate_name
-            ),
+            gate_id=gate_id,
             params=params,
             qubits=qubits,
             is_parametrized=is_parametrized,
@@ -720,6 +1102,7 @@ def qibotn_convert_to_quimb(
         t_apply1 = time.perf_counter()
 
         dt_apply = t_apply1 - t_apply0
+        t_post0 = time.perf_counter()
         add_apply_time(stats, dt_apply, n_active_qubits)
         if n_active_qubits == 1:
             gate_count_1q += 1
@@ -728,16 +1111,28 @@ def qibotn_convert_to_quimb(
             gate_count_plain_2q += 1
         else:
             gate_count_other += 1
+        t_post1 = time.perf_counter()
+
+        if n_active_qubits == 2:
+            add_twoq_profile_time(
+                stats=stats,
+                total=t_post1 - t_2q_total0,
+                prepare=t_prepare1 - t_prepare0,
+                backend_call=dt_apply,
+                postprocess=t_post1 - t_post0,
+            )
 
     if fuse_single_qubit:
         for qubit in range(circuit.nqubits):
             flush_pending_one_qubit(quimb_circuit, pending_1q, pending_1q_counts, qubit, stats)
 
     t_loop1 = time.perf_counter()
+    quimb_profiler.restore()
     t_total1 = time.perf_counter()
 
     return quimb_circuit, {
         "stage_qibo_to_quimb_sec": t_total1 - t_total0,
+        **quimb_profiler.as_meta(),
         "stage_quimb_circuit_init_sec": t_init1 - t_init0,
         "stage_gate_loop_sec": t_loop1 - t_loop0,
         "stage_gate_metadata_sec": metadata_sec,
@@ -745,6 +1140,11 @@ def qibotn_convert_to_quimb(
         "stage_gate_apply_1q_sec": stats["apply_1q_sec"],
         "stage_gate_apply_2q_sec": stats["apply_2q_sec"],
         "stage_gate_apply_other_sec": stats["apply_other_sec"],
+        "stage_apply_2q_total_sec": stats["apply_2q_total_sec"],
+        "stage_apply_2q_dispatch_sec": stats["apply_2q_dispatch_sec"],
+        "stage_apply_2q_gate_prepare_sec": stats["apply_2q_gate_prepare_sec"],
+        "stage_apply_2q_backend_call_sec": stats["apply_2q_backend_call_sec"],
+        "stage_apply_2q_postprocess_sec": stats["apply_2q_postprocess_sec"],
         "stage_gate_fusion_matrix_sec": fusion_matrix_sec,
         "stage_gate_absorb_matrix_sec": absorb_matrix_sec,
         "gate_count_1q": gate_count_1q,
@@ -760,7 +1160,12 @@ def qibotn_convert_to_quimb(
         "gate_count_flushed_1q_original": stats["gate_count_flushed_1q_original"],
         "gate_count_plain_2q": gate_count_plain_2q,
         "gate_count_fused_2q": gate_count_fused_2q,
+        "twoq_name_path_count": twoq_name_path_count,
+        "twoq_matrix_path_count": twoq_matrix_path_count,
+        "twoq_fallback_count": twoq_fallback_count,
         "two_qubit_apply": two_qubit_apply,
+        **finalize_twoq_structure_tracker(structure_tracker),
+        **mps_bond_dimension_stats(quimb_circuit),
     }
 
 
@@ -776,6 +1181,7 @@ def qibotn_expectation(
     fuse_single_qubit,
     absorb_1q_into_2q,
     two_qubit_apply,
+    profile_quimb_internals,
 ):
     import quimb.tensor as qtn
 
@@ -806,6 +1212,7 @@ def qibotn_expectation(
         fuse_single_qubit=fuse_single_qubit,
         absorb_1q_into_2q=absorb_1q_into_2q,
         two_qubit_apply=two_qubit_apply,
+        profile_quimb_internals=profile_quimb_internals,
     )
 
     fallback_reason = None
@@ -870,6 +1277,7 @@ def run_baseline(
     fuse_single_qubit,
     absorb_1q_into_2q,
     two_qubit_apply,
+    profile_quimb_internals,
 ):
     total_t0 = time.perf_counter()
     stage_times = {}
@@ -951,6 +1359,7 @@ def run_baseline(
             fuse_single_qubit=fuse_single_qubit,
             absorb_1q_into_2q=absorb_1q_into_2q,
             two_qubit_apply=two_qubit_apply,
+            profile_quimb_internals=profile_quimb_internals,
         )
         value_meta = {
             "observable": observable,
@@ -1019,6 +1428,15 @@ def add_arguments(parser):
             "Use an instrumented Qibo-to-quimb conversion loop that records "
             "gate metadata and apply_gate timing. Default conversion path is "
             "unchanged when this flag is not set."
+        ),
+    )
+    parser.add_argument(
+        "--profile-quimb-internals",
+        action="store_true",
+        help=(
+            "Temporarily monkey-patch selected quimb tensor functions during "
+            "conversion to record inclusive internal timing. This is profiling "
+            "only and is disabled by default."
         ),
     )
     parser.add_argument(
@@ -1092,6 +1510,7 @@ def run_case(args):
         fuse_single_qubit=args.fuse_single_qubit,
         absorb_1q_into_2q=args.absorb_1q_into_2q,
         two_qubit_apply=args.two_qubit_apply,
+        profile_quimb_internals=args.profile_quimb_internals,
     )
 
     meta["versions"] = versions()
@@ -1116,6 +1535,7 @@ def run_case(args):
                 fuse_single_qubit=False,
                 absorb_1q_into_2q=False,
                 two_qubit_apply=args.two_qubit_apply,
+                profile_quimb_internals=False,
             )
 
             if args.output == "statevector":
@@ -1222,6 +1642,9 @@ def batch_case_args(base_args, line_number, case):
     )
     args.profile_conversion = bool_value(
         case_value(case, "profile_conversion", args.profile_conversion)
+    )
+    args.profile_quimb_internals = bool_value(
+        case_value(case, "profile_quimb_internals", args.profile_quimb_internals)
     )
     args.fuse_single_qubit = bool_value(
         case_value(case, "fuse_single_qubit", args.fuse_single_qubit)

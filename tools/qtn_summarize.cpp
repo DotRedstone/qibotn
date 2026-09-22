@@ -162,6 +162,25 @@ static std::vector<std::string> fields() {
         "stage_gate_apply_1q_sec",
         "stage_gate_apply_2q_sec",
         "stage_gate_apply_other_sec",
+        "stage_apply_2q_total_sec",
+        "stage_apply_2q_dispatch_sec",
+        "stage_apply_2q_gate_prepare_sec",
+        "stage_apply_2q_backend_call_sec",
+        "stage_apply_2q_postprocess_sec",
+        "quimb_internal_profile_enabled",
+        "quimb_internal_wrapped_symbol_count",
+        "quimb_internal_contract_sec",
+        "quimb_internal_contract_count",
+        "quimb_internal_svd_sec",
+        "quimb_internal_svd_count",
+        "quimb_internal_split_sec",
+        "quimb_internal_split_count",
+        "quimb_internal_canonicalize_sec",
+        "quimb_internal_canonicalize_count",
+        "quimb_internal_compress_sec",
+        "quimb_internal_compress_count",
+        "quimb_internal_gate_sec",
+        "quimb_internal_gate_count",
         "stage_gate_fusion_matrix_sec",
         "stage_gate_absorb_matrix_sec",
         "stage_expectation_contract_sec",
@@ -180,6 +199,26 @@ static std::vector<std::string> fields() {
         "gate_count_flushed_1q_original",
         "gate_count_plain_2q",
         "gate_count_fused_2q",
+        "twoq_name_path_count",
+        "twoq_matrix_path_count",
+        "twoq_fallback_count",
+        "twoq_gate_count",
+        "twoq_gate_type_histogram",
+        "twoq_diagonal_count",
+        "twoq_diagonal_ratio",
+        "twoq_adjacent_count",
+        "twoq_adjacent_ratio",
+        "twoq_distance_histogram",
+        "twoq_max_distance",
+        "twoq_mean_distance",
+        "twoq_layer_count",
+        "twoq_per_layer_max",
+        "twoq_per_layer_mean",
+        "twoq_layer_histogram",
+        "mps_bond_count",
+        "mps_bond_max",
+        "mps_bond_mean",
+        "mps_bond_min",
         "state_norm",
         "reference_error",
         "reference_ok",
@@ -237,6 +276,16 @@ static std::map<std::string, std::string> summarize_one(const fs::path& stdout_p
         json_number(stdout_text, "stage_gate_apply_2q_sec");
     row["stage_gate_apply_other_sec"] =
         json_number(stdout_text, "stage_gate_apply_other_sec");
+    row["stage_apply_2q_total_sec"] =
+        json_number(stdout_text, "stage_apply_2q_total_sec");
+    row["stage_apply_2q_dispatch_sec"] =
+        json_number(stdout_text, "stage_apply_2q_dispatch_sec");
+    row["stage_apply_2q_gate_prepare_sec"] =
+        json_number(stdout_text, "stage_apply_2q_gate_prepare_sec");
+    row["stage_apply_2q_backend_call_sec"] =
+        json_number(stdout_text, "stage_apply_2q_backend_call_sec");
+    row["stage_apply_2q_postprocess_sec"] =
+        json_number(stdout_text, "stage_apply_2q_postprocess_sec");
     row["stage_gate_fusion_matrix_sec"] =
         json_number(stdout_text, "stage_gate_fusion_matrix_sec");
     row["stage_gate_absorb_matrix_sec"] =
@@ -268,6 +317,28 @@ static std::map<std::string, std::string> summarize_one(const fs::path& stdout_p
         json_number(stdout_text, "gate_count_plain_2q");
     row["gate_count_fused_2q"] =
         json_number(stdout_text, "gate_count_fused_2q");
+    row["twoq_name_path_count"] = json_number(stdout_text, "twoq_name_path_count");
+    row["twoq_matrix_path_count"] = json_number(stdout_text, "twoq_matrix_path_count");
+    row["twoq_fallback_count"] = json_number(stdout_text, "twoq_fallback_count");
+    row["twoq_gate_count"] = json_number(stdout_text, "twoq_gate_count");
+    row["twoq_gate_type_histogram"] =
+        json_string(stdout_text, "twoq_gate_type_histogram");
+    row["twoq_diagonal_count"] = json_number(stdout_text, "twoq_diagonal_count");
+    row["twoq_diagonal_ratio"] = json_number(stdout_text, "twoq_diagonal_ratio");
+    row["twoq_adjacent_count"] = json_number(stdout_text, "twoq_adjacent_count");
+    row["twoq_adjacent_ratio"] = json_number(stdout_text, "twoq_adjacent_ratio");
+    row["twoq_distance_histogram"] =
+        json_string(stdout_text, "twoq_distance_histogram");
+    row["twoq_max_distance"] = json_number(stdout_text, "twoq_max_distance");
+    row["twoq_mean_distance"] = json_number(stdout_text, "twoq_mean_distance");
+    row["twoq_layer_count"] = json_number(stdout_text, "twoq_layer_count");
+    row["twoq_per_layer_max"] = json_number(stdout_text, "twoq_per_layer_max");
+    row["twoq_per_layer_mean"] = json_number(stdout_text, "twoq_per_layer_mean");
+    row["twoq_layer_histogram"] = json_string(stdout_text, "twoq_layer_histogram");
+    row["mps_bond_count"] = json_number(stdout_text, "mps_bond_count");
+    row["mps_bond_max"] = json_number(stdout_text, "mps_bond_max");
+    row["mps_bond_mean"] = json_number(stdout_text, "mps_bond_mean");
+    row["mps_bond_min"] = json_number(stdout_text, "mps_bond_min");
     row["state_norm"] = json_number(stdout_text, "state_norm");
 
     std::string reference_error = json_number_after(stdout_text, "\"reference\"", "abs_error");
